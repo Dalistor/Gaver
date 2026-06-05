@@ -9,6 +9,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/Dalistor/gaver/core/manifest"
 	"github.com/Dalistor/gaver/templates"
 )
 
@@ -30,6 +31,51 @@ func Generate(projectType, name, database string) error {
 	}
 
 	return writeFromTemplates(projectType, name, data)
+}
+
+type ModuleData struct {
+	ProjectName string
+	ModuleName  string
+}
+
+func GenerateModule(moduleName string) error {
+	m, err := manifest.Load()
+	if err != nil {
+		return err
+	}
+
+	outDir := filepath.Join("src", "modules", moduleName)
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		return fmt.Errorf("módulo %q já existe em %s", moduleName, outDir)
+	}
+
+	data := ModuleData{
+		ProjectName: m.Name,
+		ModuleName:  moduleName,
+	}
+
+	content, err := templates.FS.ReadFile("module/module.go.tmpl")
+	if err != nil {
+		return fmt.Errorf("template de módulo não encontrado: %w", err)
+	}
+
+	tmpl, err := template.New("module.go").Parse(string(content))
+	if err != nil {
+		return fmt.Errorf("template inválido: %w", err)
+	}
+
+	outPath := filepath.Join(outDir, "module.go")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+
+	f, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return tmpl.Execute(f, data)
 }
 
 func writeFromTemplates(templateRoot, projectDir string, data Data) error {

@@ -1,0 +1,10 @@
+package main
+
+import "{{.Name}}/src/engine"
+
+func main() {
+	e := engine.New()
+	// Registre seus módulos aqui:
+	// e.Register(example.New())
+	e.Start()
+}

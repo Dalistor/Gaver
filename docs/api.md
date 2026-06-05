@@ -109,6 +109,16 @@ Cada módulo encapsula uma seção da regra de negócio. Um módulo pode interag
 
 ### Criando um módulo
 
+Use o gerador do Gaver a partir da raiz do projeto:
+
+```sh
+gaver gen module --name orders
+```
+
+Isso cria `src/modules/orders/module.go` com a estrutura base. Depois, registre em `main.go`.
+
+Ou crie manualmente:
+
 1. Crie a pasta `src/modules/<nome>/`
 2. Crie o arquivo `module.go` implementando a interface `engine.Module`
 3. Registre no `main.go`

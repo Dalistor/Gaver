@@ -99,24 +99,31 @@ gaver build
 
 Gera artefatos para um projeto existente.
 
-#### `gaver gen pipeline`
+#### `gaver gen module`
 
-Gera a definição de pipeline de CI/CD.
+Gera a estrutura de um novo módulo de domínio dentro do projeto atual. Deve ser executado na raiz do projeto (onde está o `gaver.json`).
 
 ```sh
-gaver gen pipeline --target <alvo>
+gaver gen module --name <nome>
 ```
 
 | Flag | Obrigatório | Descrição |
 |---|---|---|
-| `--target`, `-t` | Sim | Alvo: `github-actions`, `gitlab-ci` |
+| `--name`, `-n` | Sim | Nome do módulo |
 
 **Exemplos:**
 
 ```sh
-gaver gen pipeline --target github-actions
-gaver gen pipeline --target gitlab-ci
+gaver gen module --name orders
+gaver gen module --name users
 ```
+
+Após gerar, registre o módulo em `main.go`:
+
+```go
+e.Register(orders.New())
+```
+
 
 ---
 

@@ -1,0 +1,28 @@
+package moduleexample
+
+import (
+	"net/http"
+
+	"{{.Name}}/src/engine"
+)
+
+type Module struct{}
+
+func New() *Module {
+	return &Module{}
+}
+
+func (m *Module) Name() string {
+	return "moduleExample"
+}
+
+func (m *Module) Setup(e *engine.Engine) error {
+	e.Handle("/example", http.HandlerFunc(m.handleExample))
+	return nil
+}
+
+func (m *Module) handleExample(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message": "example module"}`))
+}
