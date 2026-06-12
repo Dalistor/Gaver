@@ -25,3 +25,14 @@ func Clone(url string) (tmpDir string, cleanup func(), err error) {
 
 	return tmpDir, cleanup, nil
 }
+
+// CloneTo clona um repositório Git em profundidade 1 diretamente para dest.
+// Usado por gaver install para materializar sub-módulos no lugar definitivo.
+func CloneTo(url, dest string) error {
+	cmd := exec.Command("git", "clone", "--depth=1", url, dest)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("falha ao clonar %s: %w", url, err)
+	}
+	return nil
+}
