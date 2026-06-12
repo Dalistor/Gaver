@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/Dalistor/gaver/core/downloader"
+	"github.com/Dalistor/gaver/core/lockfile"
 	"github.com/Dalistor/gaver/core/manifest"
 	"github.com/spf13/cobra"
 )
@@ -28,6 +29,13 @@ func installModules(dir string) error {
 		return err
 	}
 
+	lf, err := lockfile.Load(dir)
+	if err != nil {
+		return fmt.Errorf("falha ao ler gaver.lock em %s: %w", dir, err)
+	}
+
+	lockChanged := false
+
 	for _, mod := range m.Modules {
 		modDir := filepath.Join(dir, "modules", mod.Name)
 
@@ -44,16 +52,41 @@ func installModules(dir string) error {
 			continue
 		}
 
-		fmt.Printf("[%s] instalando %q de %s...\n", m.Name, mod.Name, mod.Source)
 		if err := os.MkdirAll(filepath.Join(dir, "modules"), 0755); err != nil {
 			return err
 		}
-		if err := downloader.CloneTo(mod.Source, modDir); err != nil {
+
+		// Usa commit do lock se disponível; caso contrário clona HEAD
+		lockedCommit := ""
+		if entry, ok := lf.Get(mod.Name); ok && entry.Source == mod.Source {
+			lockedCommit = entry.Commit
+			fmt.Printf("[%s] instalando %q @ %s...\n", m.Name, mod.Name, lockedCommit[:8])
+		} else {
+			fmt.Printf("[%s] instalando %q de %s...\n", m.Name, mod.Name, mod.Source)
+		}
+
+		if err := downloader.CloneTo(mod.Source, modDir, lockedCommit); err != nil {
 			return err
+		}
+
+		// Registra ou confirma o commit no lock
+		commit, err := downloader.HeadCommit(modDir)
+		if err != nil {
+			fmt.Printf("[%s] aviso: não foi possível obter commit de %q: %v\n", m.Name, mod.Name, err)
+		} else {
+			lf.Set(mod.Name, mod.Source, commit)
+			lockChanged = true
+			fmt.Printf("[%s] %q fixado em %s\n", m.Name, mod.Name, commit[:8])
 		}
 
 		if err := installModules(modDir); err != nil {
 			return err
+		}
+	}
+
+	if lockChanged {
+		if err := lockfile.Save(dir, lf); err != nil {
+			return fmt.Errorf("falha ao salvar gaver.lock: %w", err)
 		}
 	}
 

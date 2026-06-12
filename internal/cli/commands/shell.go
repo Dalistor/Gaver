@@ -1,21 +1,71 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Dalistor/gaver/core/manifest"
 	"github.com/Dalistor/gaver/core/pidstore"
 )
 
-// runShellIn executa um comando de shell no diretório dir, em foreground.
+// ── Output ────────────────────────────────────────────────────────────────────
+
+var outputMu sync.Mutex
+
+// prefixWriter prefixa cada linha com "[nome] " e serializa escritas no output.
+type prefixWriter struct {
+	prefix string
+	w      io.Writer
+	buf    []byte
+}
+
+func (pw *prefixWriter) Write(p []byte) (int, error) {
+	var out []byte
+	remaining := p
+	for len(remaining) > 0 {
+		idx := bytes.IndexByte(remaining, '\n')
+		if idx == -1 {
+			pw.buf = append(pw.buf, remaining...)
+			break
+		}
+		line := append(pw.buf, remaining[:idx+1]...)
+		out = append(out, []byte(pw.prefix)...)
+		out = append(out, line...)
+		pw.buf = pw.buf[:0]
+		remaining = remaining[idx+1:]
+	}
+	if len(out) > 0 {
+		outputMu.Lock()
+		pw.w.Write(out)
+		outputMu.Unlock()
+	}
+	return len(p), nil
+}
+
+// ── Shell runner ──────────────────────────────────────────────────────────────
+
+// platformShell retorna o interpretador de shell adequado ao SO atual.
+func platformShell() (string, string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", "/C"
+	}
+	return "sh", "-c"
+}
+
+// runShellIn executa um comando no dir em foreground (sem prefixo).
 func runShellIn(dir, command string) error {
-	c := exec.Command("sh", "-c", command)
+	shell, flag := platformShell()
+	c := exec.Command(shell, flag, command)
 	c.Dir = dir
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
@@ -23,20 +73,24 @@ func runShellIn(dir, command string) error {
 	return c.Run()
 }
 
-// startBackgroundIn inicia um processo em background e salva o PID em rootDir.
+// startBackgroundIn inicia um processo em background, prefixa logs com o nome do módulo
+// e salva o PID em rootDir/.gaver/pids/.
 func startBackgroundIn(rootDir, name, dir, command string) error {
-	c := exec.Command("sh", "-c", command)
+	shell, flag := platformShell()
+	c := exec.Command(shell, flag, command)
 	c.Dir = dir
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	c.Stdout = &prefixWriter{prefix: fmt.Sprintf("[%s] ", name), w: os.Stdout}
+	c.Stderr = &prefixWriter{prefix: fmt.Sprintf("[%s] ", name), w: os.Stderr}
 	if err := c.Start(); err != nil {
 		return err
 	}
 	return pidstore.Save(rootDir, name, c.Process.Pid)
 }
 
+// ── Cascade (init / build / exec) ────────────────────────────────────────────
+
 // runCascade executa cmdKey no módulo em dir e em todos os sub-módulos instalados,
-// respeitando depends_on e executando por níveis (paralelo ou sequencial).
+// respeitando depends_on e executando por níveis.
 func runCascade(dir, cmdKey string, parallel bool) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -56,7 +110,7 @@ func runCascade(dir, cmdKey string, parallel bool) error {
 
 	levels := computeLevels(m.Modules)
 	for _, level := range levels {
-		if err := execLevel(absDir, level, parallel, func(modDir string) error {
+		if err := execLevel(absDir, level, parallel, func(modDir string, _ manifest.ModuleRef) error {
 			return runCascade(modDir, cmdKey, parallel)
 		}); err != nil {
 			return err
@@ -65,9 +119,10 @@ func runCascade(dir, cmdKey string, parallel bool) error {
 	return nil
 }
 
-// startNetwork inicia recursivamente todos os run commands da hierarquia em background,
-// respeitando depends_on: sub-módulos de nível mais baixo sobem primeiro.
-// rootDir é o diretório raiz onde os PIDs são armazenados.
+// ── Network run ───────────────────────────────────────────────────────────────
+
+// startNetwork inicia recursivamente todos os run commands em background,
+// respeitando depends_on e aguardando health checks antes de subir o próximo nível.
 func startNetwork(dir, rootDir string, parallel bool) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -78,17 +133,18 @@ func startNetwork(dir, rootDir string, parallel bool) error {
 		return err
 	}
 
-	// Sobe sub-módulos por nível (depends_on garante a ordem)
 	levels := computeLevels(m.Modules)
 	for _, level := range levels {
-		if err := execLevel(absDir, level, parallel, func(modDir string) error {
-			return startNetwork(modDir, rootDir, parallel)
+		if err := execLevel(absDir, level, parallel, func(modDir string, mod manifest.ModuleRef) error {
+			if err := startNetwork(modDir, rootDir, parallel); err != nil {
+				return err
+			}
+			return waitForHealth(mod)
 		}); err != nil {
 			return err
 		}
 	}
 
-	// Depois sobe o próprio módulo
 	if cmd, ok := m.Commands["run"]; ok && cmd != "" {
 		fmt.Printf("[%s] iniciando...\n", m.Name)
 		if err := startBackgroundIn(rootDir, m.Name, absDir, cmd); err != nil {
@@ -98,37 +154,108 @@ func startNetwork(dir, rootDir string, parallel bool) error {
 	return nil
 }
 
-// waitForStop bloqueia até receber SIGINT/SIGTERM e então para todos os módulos.
+// waitForStop bloqueia até SIGINT/SIGTERM e então para todos os módulos com grace period.
 func waitForStop(rootDir string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 	fmt.Println("\nParando módulos...")
-	stopAll(rootDir)
+	stopAll(rootDir, 30*time.Second)
 }
 
-// stopAll envia SIGTERM para todos os processos com PID salvo em rootDir.
-func stopAll(rootDir string) {
+// stopAll envia SIGTERM a todos os processos gerenciados, aguarda gracePeriod
+// e envia SIGKILL aos que ainda não encerraram.
+func stopAll(rootDir string, gracePeriod time.Duration) {
 	pids := pidstore.List(rootDir)
 	if len(pids) == 0 {
 		fmt.Println("Nenhum módulo em execução.")
 		return
 	}
+
+	procs := make(map[string]*os.Process, len(pids))
 	for name, pid := range pids {
 		proc, err := os.FindProcess(pid)
 		if err != nil {
 			continue
 		}
 		if err := proc.Signal(syscall.SIGTERM); err == nil {
-			fmt.Printf("[%s] parado (pid %d)\n", name, pid)
+			fmt.Printf("[%s] encerrando (pid %d)...\n", name, pid)
+			procs[name] = proc
 		}
 		pidstore.Remove(rootDir, name)
 	}
+
+	deadline := time.After(gracePeriod)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for len(procs) > 0 {
+		select {
+		case <-deadline:
+			for name, proc := range procs {
+				fmt.Printf("[%s] forçando encerramento (SIGKILL)...\n", name)
+				proc.Signal(syscall.SIGKILL)
+			}
+			return
+		case <-ticker.C:
+			for name, proc := range procs {
+				if proc.Signal(syscall.Signal(0)) != nil {
+					fmt.Printf("[%s] encerrado\n", name)
+					delete(procs, name)
+				}
+			}
+		}
+	}
 }
 
-// execLevel executa fn para cada módulo em mods, em paralelo ou sequencialmente,
-// respeitando a ordem dentro do nível.
-func execLevel(parentDir string, mods []manifest.ModuleRef, parallel bool, fn func(string) error) error {
+// ── Health check ──────────────────────────────────────────────────────────────
+
+// waitForHealth aguarda o módulo declarar-se saudável via HTTP antes de continuar.
+// Retorna nil imediatamente se o módulo não declarar health check.
+func waitForHealth(mod manifest.ModuleRef) error {
+	if mod.Health == nil || mod.Health.URL == "" {
+		return nil
+	}
+
+	timeout := parseDurationOrDefault(mod.Health.Timeout, 30*time.Second)
+	interval := parseDurationOrDefault(mod.Health.Interval, 2*time.Second)
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	deadline := time.Now().Add(timeout)
+
+	fmt.Printf("[%s] aguardando health check em %s...\n", mod.Name, mod.Health.URL)
+
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(mod.Health.URL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				fmt.Printf("[%s] pronto\n", mod.Name)
+				return nil
+			}
+		}
+		time.Sleep(interval)
+	}
+
+	return fmt.Errorf("módulo %q não ficou saudável após %s", mod.Name, timeout)
+}
+
+func parseDurationOrDefault(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return def
+	}
+	return d
+}
+
+// ── Level execution ───────────────────────────────────────────────────────────
+
+// execLevel executa fn para cada módulo em mods, em paralelo ou sequencialmente.
+// fn recebe o diretório do módulo e o ModuleRef completo.
+func execLevel(parentDir string, mods []manifest.ModuleRef, parallel bool, fn func(string, manifest.ModuleRef) error) error {
 	if parallel {
 		var wg sync.WaitGroup
 		errs := make(chan error, len(mods))
@@ -141,7 +268,7 @@ func execLevel(parentDir string, mods []manifest.ModuleRef, parallel bool, fn fu
 					fmt.Printf("aviso: sub-módulo %q não instalado — execute gaver install\n", mod.Name)
 					return
 				}
-				if err := fn(modDir); err != nil {
+				if err := fn(modDir, mod); err != nil {
 					errs <- err
 				}
 			}()
@@ -160,16 +287,18 @@ func execLevel(parentDir string, mods []manifest.ModuleRef, parallel bool, fn fu
 			fmt.Printf("aviso: sub-módulo %q não instalado — execute gaver install\n", mod.Name)
 			continue
 		}
-		if err := fn(modDir); err != nil {
+		if err := fn(modDir, mod); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// ── Topological sort ──────────────────────────────────────────────────────────
+
 // computeLevels agrupa módulos em níveis de execução respeitando depends_on.
-// Nível 0 = sem dependências, nível 1 = depende só do nível 0, etc.
-// Detecta ciclos e os coloca em um nível único ao final.
+// Algoritmo de Kahn: nível 0 = sem deps, nível N = deps todos no nível < N.
+// Ciclos são agrupados em um único nível ao final.
 func computeLevels(modules []manifest.ModuleRef) [][]manifest.ModuleRef {
 	if len(modules) == 0 {
 		return nil
@@ -180,7 +309,6 @@ func computeLevels(modules []manifest.ModuleRef) [][]manifest.ModuleRef {
 		inDeg[m.Name] = len(m.DependsOn)
 	}
 
-	// dependents[x] = lista de módulos que dependem de x
 	dependents := make(map[string][]string)
 	for _, m := range modules {
 		for _, dep := range m.DependsOn {
@@ -199,7 +327,7 @@ func computeLevels(modules []manifest.ModuleRef) [][]manifest.ModuleRef {
 			}
 		}
 		if len(level) == 0 {
-			// Ciclo detectado — coloca todos os restantes juntos
+			// Ciclo detectado — agrupa restantes e encerra
 			for _, m := range modules {
 				if !processed[m.Name] {
 					level = append(level, m)
