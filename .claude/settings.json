@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(grep -rn \"exec\\\\|shell injection\\\\|\\\\\\\\$\\\\|eval\" /home/dalistor/Documentos/Projetos/Gaver/internal/cli/commands/shell.go)"
+    ]
+  }
+}

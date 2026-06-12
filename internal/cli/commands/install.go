@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const maxInstallDepth = 20
+
 var InstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Baixa e instala todos os sub-módulos declarados em gaver.json recursivamente",
@@ -19,11 +21,15 @@ var InstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return installModules(absDir)
+		return installModules(absDir, 0)
 	},
 }
 
-func installModules(dir string) error {
+func installModules(dir string, depth int) error {
+	if depth >= maxInstallDepth {
+		return fmt.Errorf("profundidade máxima de módulos (%d) atingida em %s — verifique se há ciclos na hierarquia", maxInstallDepth, dir)
+	}
+
 	m, err := manifest.LoadFrom(dir)
 	if err != nil {
 		return err
@@ -41,7 +47,7 @@ func installModules(dir string) error {
 
 		if _, err := os.Stat(modDir); !os.IsNotExist(err) {
 			fmt.Printf("[%s] sub-módulo %q já instalado\n", m.Name, mod.Name)
-			if err := installModules(modDir); err != nil {
+			if err := installModules(modDir, depth+1); err != nil {
 				return err
 			}
 			continue
@@ -79,7 +85,7 @@ func installModules(dir string) error {
 			fmt.Printf("[%s] %q fixado em %s\n", m.Name, mod.Name, commit[:8])
 		}
 
-		if err := installModules(modDir); err != nil {
+		if err := installModules(modDir, depth+1); err != nil {
 			return err
 		}
 	}

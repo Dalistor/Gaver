@@ -98,6 +98,17 @@ func (m *Manifest) Validate() error {
 		}
 		seen[mod.Name] = true
 
+		if mod.Source != "" {
+			valid := strings.HasPrefix(mod.Source, "https://") ||
+				strings.HasPrefix(mod.Source, "git@") ||
+				strings.HasPrefix(mod.Source, "ssh://")
+			if !valid {
+				errs = append(errs, fmt.Sprintf(
+					"módulo %q: source deve ser URL remota (https:// ou git@host:path), não caminho local", mod.Name,
+				))
+			}
+		}
+
 		for _, dep := range mod.DependsOn {
 			if !known[dep] {
 				errs = append(errs, fmt.Sprintf(

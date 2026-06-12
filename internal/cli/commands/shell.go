@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -108,7 +109,10 @@ func runCascade(dir, cmdKey string, parallel bool) error {
 		}
 	}
 
-	levels := computeLevels(m.Modules)
+	levels, err := computeLevels(m.Modules)
+	if err != nil {
+		return fmt.Errorf("módulo %q: %w", m.Name, err)
+	}
 	for _, level := range levels {
 		if err := execLevel(absDir, level, parallel, func(modDir string, _ manifest.ModuleRef) error {
 			return runCascade(modDir, cmdKey, parallel)
@@ -133,7 +137,10 @@ func startNetwork(dir, rootDir string, parallel bool) error {
 		return err
 	}
 
-	levels := computeLevels(m.Modules)
+	levels, err := computeLevels(m.Modules)
+	if err != nil {
+		return fmt.Errorf("módulo %q: %w", m.Name, err)
+	}
 	for _, level := range levels {
 		if err := execLevel(absDir, level, parallel, func(modDir string, mod manifest.ModuleRef) error {
 			if err := startNetwork(modDir, rootDir, parallel); err != nil {
@@ -176,13 +183,16 @@ func stopAll(rootDir string, gracePeriod time.Duration) {
 	for name, pid := range pids {
 		proc, err := os.FindProcess(pid)
 		if err != nil {
+			pidstore.Remove(rootDir, name)
 			continue
 		}
 		if err := proc.Signal(syscall.SIGTERM); err == nil {
 			fmt.Printf("[%s] encerrando (pid %d)...\n", name, pid)
 			procs[name] = proc
+		} else {
+			// Processo já morto — remove PID imediatamente
+			pidstore.Remove(rootDir, name)
 		}
-		pidstore.Remove(rootDir, name)
 	}
 
 	deadline := time.After(gracePeriod)
@@ -195,12 +205,14 @@ func stopAll(rootDir string, gracePeriod time.Duration) {
 			for name, proc := range procs {
 				fmt.Printf("[%s] forçando encerramento (SIGKILL)...\n", name)
 				proc.Signal(syscall.SIGKILL)
+				pidstore.Remove(rootDir, name)
 			}
 			return
 		case <-ticker.C:
 			for name, proc := range procs {
 				if proc.Signal(syscall.Signal(0)) != nil {
 					fmt.Printf("[%s] encerrado\n", name)
+					pidstore.Remove(rootDir, name)
 					delete(procs, name)
 				}
 			}
@@ -220,7 +232,7 @@ func waitForHealth(mod manifest.ModuleRef) error {
 	timeout := parseDurationOrDefault(mod.Health.Timeout, 30*time.Second)
 	interval := parseDurationOrDefault(mod.Health.Interval, 2*time.Second)
 
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{Timeout: interval}
 	deadline := time.Now().Add(timeout)
 
 	fmt.Printf("[%s] aguardando health check em %s...\n", mod.Name, mod.Health.URL)
@@ -298,10 +310,10 @@ func execLevel(parentDir string, mods []manifest.ModuleRef, parallel bool, fn fu
 
 // computeLevels agrupa módulos em níveis de execução respeitando depends_on.
 // Algoritmo de Kahn: nível 0 = sem deps, nível N = deps todos no nível < N.
-// Ciclos são agrupados em um único nível ao final.
-func computeLevels(modules []manifest.ModuleRef) [][]manifest.ModuleRef {
+// Retorna erro se detectar ciclo em depends_on.
+func computeLevels(modules []manifest.ModuleRef) ([][]manifest.ModuleRef, error) {
 	if len(modules) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	inDeg := make(map[string]int, len(modules))
@@ -327,14 +339,13 @@ func computeLevels(modules []manifest.ModuleRef) [][]manifest.ModuleRef {
 			}
 		}
 		if len(level) == 0 {
-			// Ciclo detectado — agrupa restantes e encerra
+			var cyclic []string
 			for _, m := range modules {
 				if !processed[m.Name] {
-					level = append(level, m)
+					cyclic = append(cyclic, m.Name)
 				}
 			}
-			levels = append(levels, level)
-			break
+			return nil, fmt.Errorf("ciclo detectado em depends_on entre: %s", strings.Join(cyclic, ", "))
 		}
 		for _, m := range level {
 			processed[m.Name] = true
@@ -345,5 +356,5 @@ func computeLevels(modules []manifest.ModuleRef) [][]manifest.ModuleRef {
 		levels = append(levels, level)
 	}
 
-	return levels
+	return levels, nil
 }
