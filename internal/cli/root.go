@@ -26,4 +26,5 @@ func init() {
 	rootCmd.AddCommand(commands.RunCmd)
 	rootCmd.AddCommand(commands.BuildCmd)
 	rootCmd.AddCommand(commands.GenCmd)
+	rootCmd.AddCommand(commands.RepoCmd)
 }

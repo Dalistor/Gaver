@@ -10,27 +10,26 @@ import (
 	"time"
 
 	"github.com/Dalistor/gaver/core/manifest"
-	"github.com/Dalistor/gaver/templates"
 )
 
 type Data struct {
 	Name      string
-	Database  string
 	CreatedAt string
 }
 
-func Generate(projectType, name, database string) error {
+func Generate(repoDir, projectType, name string) error {
 	if _, err := os.Stat(name); !os.IsNotExist(err) {
 		return fmt.Errorf("diretório %q já existe", name)
 	}
 
 	data := Data{
 		Name:      name,
-		Database:  database,
 		CreatedAt: time.Now().Format("2006-01-02"),
 	}
 
-	return writeFromTemplates(projectType, name, data)
+	templateRoot := filepath.Join(repoDir, "projects", projectType)
+	fsys := os.DirFS(templateRoot)
+	return writeFromTemplates(fsys, name, data)
 }
 
 type ModuleData struct {
@@ -38,7 +37,7 @@ type ModuleData struct {
 	ModuleName  string
 }
 
-func GenerateModule(moduleName string) error {
+func GenerateModule(repoDir, moduleName string) error {
 	m, err := manifest.Load()
 	if err != nil {
 		return err
@@ -49,19 +48,20 @@ func GenerateModule(moduleName string) error {
 		return fmt.Errorf("módulo %q já existe em %s", moduleName, outDir)
 	}
 
-	data := ModuleData{
-		ProjectName: m.Name,
-		ModuleName:  moduleName,
-	}
-
-	content, err := templates.FS.ReadFile("module/module.go.tmpl")
+	tmplPath := filepath.Join(repoDir, "modules", "module.go.tmpl")
+	content, err := os.ReadFile(tmplPath)
 	if err != nil {
-		return fmt.Errorf("template de módulo não encontrado: %w", err)
+		return fmt.Errorf("template de módulo não encontrado em %s: %w", tmplPath, err)
 	}
 
 	tmpl, err := template.New("module.go").Parse(string(content))
 	if err != nil {
 		return fmt.Errorf("template inválido: %w", err)
+	}
+
+	data := ModuleData{
+		ProjectName: m.Name,
+		ModuleName:  moduleName,
 	}
 
 	outPath := filepath.Join(outDir, "module.go")
@@ -78,24 +78,23 @@ func GenerateModule(moduleName string) error {
 	return tmpl.Execute(f, data)
 }
 
-func writeFromTemplates(templateRoot, projectDir string, data Data) error {
-	return fs.WalkDir(templates.FS, templateRoot, func(path string, d fs.DirEntry, err error) error {
+func writeFromTemplates(fsys fs.FS, projectDir string, data Data) error {
+	return fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		relPath := strings.TrimPrefix(path, templateRoot+"/")
-		if path == templateRoot {
+		if path == "." {
 			return nil
 		}
 
-		outPath := filepath.Join(projectDir, filepath.FromSlash(relPath))
+		outPath := filepath.Join(projectDir, filepath.FromSlash(path))
 
 		if d.IsDir() {
 			return os.MkdirAll(outPath, 0755)
 		}
 
-		content, err := templates.FS.ReadFile(path)
+		content, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return err
 		}

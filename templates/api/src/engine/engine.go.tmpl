@@ -3,22 +3,6 @@ package engine
 import (
 	"log"
 	"net/http"
-{{- if eq .Database "postgres"}}
-	"database/sql"
-	"os"
-
-	_ "github.com/lib/pq"
-{{- else if eq .Database "mysql"}}
-	"database/sql"
-	"os"
-
-	_ "github.com/go-sql-driver/mysql"
-{{- else if eq .Database "sqlite"}}
-	"database/sql"
-	"os"
-
-	_ "github.com/mattn/go-sqlite3"
-{{- end}}
 )
 
 // Module é a interface que todos os módulos de domínio devem implementar.
@@ -27,12 +11,9 @@ type Module interface {
 	Setup(e *Engine) error
 }
 
-// Engine gerencia módulos e recursos compartilhados.
+// Engine gerencia módulos e o roteamento HTTP.
 type Engine struct {
 	mux     *http.ServeMux
-{{- if .Database}}
-	db      *sql.DB
-{{- end}}
 	modules []Module
 }
 
@@ -51,40 +32,8 @@ func (e *Engine) Register(m Module) {
 func (e *Engine) Handle(pattern string, handler http.Handler) {
 	e.mux.Handle(pattern, handler)
 }
-{{if .Database}}
-// DB retorna a conexão com o banco de dados.
-func (e *Engine) DB() *sql.DB {
-	return e.db
-}
-{{end}}
-func (e *Engine) Start() {
-{{- if eq .Database "postgres"}}
-	db, err := sql.Open("postgres", os.Getenv("DB_DSN"))
-	if err != nil {
-		log.Fatalf("erro ao conectar ao banco: %v", err)
-	}
-	defer db.Close()
-	e.db = db
-{{- else if eq .Database "mysql"}}
-	db, err := sql.Open("mysql", os.Getenv("DB_DSN"))
-	if err != nil {
-		log.Fatalf("erro ao conectar ao banco: %v", err)
-	}
-	defer db.Close()
-	e.db = db
-{{- else if eq .Database "sqlite"}}
-	path := os.Getenv("DB_PATH")
-	if path == "" {
-		path = "./{{.Name}}.db"
-	}
-	db, err := sql.Open("sqlite3", path)
-	if err != nil {
-		log.Fatalf("erro ao conectar ao banco: %v", err)
-	}
-	defer db.Close()
-	e.db = db
-{{- end}}
 
+func (e *Engine) Start() {
 	for _, m := range e.modules {
 		if err := m.Setup(e); err != nil {
 			log.Fatalf("erro ao inicializar módulo %q: %v", m.Name(), err)

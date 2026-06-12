@@ -11,12 +11,7 @@ type Manifest struct {
 	Version  string   `json:"version"`
 	Type     string   `json:"type"`
 	Platform string   `json:"platform"`
-	Database Database `json:"database"`
 	Commands Commands `json:"commands"`
-}
-
-type Database struct {
-	Type string `json:"type"`
 }
 
 type Commands struct {
