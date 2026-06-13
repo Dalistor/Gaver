@@ -102,6 +102,8 @@ Array de referências a sub-módulos. Cada entrada:
 | `source` | string | URL do repositório Git (`https://`, `git@`, `ssh://`) |
 | `depends_on` | array | Nomes de módulos que devem estar prontos antes deste |
 | `health` | object | Configuração de health check HTTP |
+| `env` | object | Variáveis de ambiente estáticas injetadas neste módulo |
+| `env_from` | array | Módulos cujos `exports` serão injetados como variáveis de ambiente |
 
 ### `health`
 
@@ -118,6 +120,34 @@ Antes de subir o próximo nível de módulos, o Gaver aguarda o health check do 
   "url": "http://localhost:8080/health",
   "timeout": "60s",
   "interval": "3s"
+}
+```
+
+### `exports`
+
+Canais e endpoints que este módulo expõe. Cada chave é o nome do export:
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `protocol` | string | Protocolo do canal: `grpc`, `http`, `unix`, `amqp`, `tcp`, etc. |
+| `address` | string | Endereço de conexão: `host:porta` ou caminho de socket |
+| `schema` | string | Opcional — caminho para o contrato da interface (`.proto`, `openapi.yaml`, etc.) |
+
+```json
+"exports": {
+  "functions": {
+    "protocol": "grpc",
+    "address": "localhost:50051",
+    "schema": "proto/payments.proto"
+  },
+  "stream": {
+    "protocol": "unix",
+    "address": ".gaver/sockets/payments.sock"
+  },
+  "events": {
+    "protocol": "amqp",
+    "address": "localhost:5672"
+  }
 }
 ```
 
@@ -268,6 +298,334 @@ gaver exec seed --parallel   # executa nos módulos independentes em paralelo
 ```
 
 O Gaver propaga o comando por toda a hierarquia, executando apenas nos módulos que tiverem aquela chave declarada.
+
+---
+
+## Comunicação entre módulos
+
+O Gaver fornece uma camada de fiação automática entre módulos: o módulo produtor declara o que expõe (`exports`) e o módulo consumidor declara de onde quer receber (`env_from`). O Gaver resolve tudo em tempo de boot — não há proxy, não há sidecar, não há overhead em runtime.
+
+### Como funciona o fluxo completo
+
+```
+gaver run
+  │
+  ├─ Nível 0: sobe "database"
+  │     ├─ inicia processo com env injetado pelo pai
+  │     ├─ aguarda health check: GET http://localhost:5432/health → 200 OK
+  │     └─ salva exports em .gaver/exports/database.json
+  │
+  ├─ Nível 1: sobe "cache" e "api" (independentes entre si)
+  │     ├─ lê .gaver/exports/database.json
+  │     ├─ converte exports → variáveis de ambiente
+  │     ├─ inicia processos com essas vars + env estático do ModuleRef
+  │     ├─ aguarda health checks
+  │     └─ salva exports de "cache" e "api"
+  │
+  └─ Rede pronta. Ctrl+C → graceful shutdown.
+```
+
+As variáveis de ambiente ficam disponíveis para o processo do módulo consumidor da mesma forma que qualquer env var do sistema operacional — sem configuração adicional no código do módulo.
+
+---
+
+### Exportando um canal
+
+No `gaver.json` do módulo produtor, declare o campo `exports`:
+
+```json
+{
+  "name": "database",
+  "version": "1.0.0",
+  "exports": {
+    "functions": {
+      "protocol": "grpc",
+      "address": "localhost:50051",
+      "schema": "proto/database.proto"
+    },
+    "stream": {
+      "protocol": "unix",
+      "address": ".gaver/sockets/database.sock"
+    }
+  },
+  "commands": {
+    "run": "./database-server"
+  }
+}
+```
+
+Um módulo pode exportar quantos canais quiser com nomes arbitrários. O nome do export (`"functions"`, `"stream"`) vira parte do nome da variável de ambiente.
+
+---
+
+### Consumindo exports de outro módulo
+
+No `gaver.json` do projeto pai, declare `env_from` na referência ao módulo consumidor:
+
+```json
+{
+  "name": "meu-sistema",
+  "modules": [
+    {
+      "name": "database",
+      "source": "https://github.com/minha-org/gaver-database"
+    },
+    {
+      "name": "api",
+      "source": "https://github.com/minha-org/gaver-api",
+      "depends_on": ["database"],
+      "env_from": ["database"]
+    }
+  ]
+}
+```
+
+Com isso, quando o módulo `api` iniciar, ele receberá automaticamente:
+
+```
+DATABASE_FUNCTIONS=grpc://localhost:50051
+DATABASE_FUNCTIONS_SCHEMA=proto/database.proto
+DATABASE_STREAM=unix://.gaver/sockets/database.sock
+```
+
+---
+
+### Convenção de nomes das variáveis
+
+O Gaver gera os nomes das variáveis a partir do nome do módulo e do nome do export:
+
+```
+{NOME_DO_MÓDULO}_{NOME_DO_EXPORT} = {protocol}://{address}
+{NOME_DO_MÓDULO}_{NOME_DO_EXPORT}_SCHEMA = {schema}   (se declarado)
+```
+
+Hífens e pontos nos nomes são convertidos para `_`. Tudo em maiúsculas.
+
+| Módulo | Export | Variável gerada |
+|---|---|---|
+| `database` | `functions` | `DATABASE_FUNCTIONS=grpc://localhost:50051` |
+| `database` | `stream` | `DATABASE_STREAM=unix://.gaver/sockets/db.sock` |
+| `my-cache` | `events` | `MY_CACHE_EVENTS=amqp://localhost:5672` |
+| `payments` | `api` | `PAYMENTS_API=http://localhost:3001` |
+
+---
+
+### Injetando variáveis estáticas com `env`
+
+Além de `env_from`, o pai pode injetar variáveis de ambiente fixas diretamente na referência do módulo, sem precisar de exports:
+
+```json
+{
+  "name": "api",
+  "source": "https://...",
+  "env": {
+    "NODE_ENV": "production",
+    "PORT": "8080",
+    "LOG_LEVEL": "info"
+  }
+}
+```
+
+`env` e `env_from` podem ser usados juntos — o módulo receberá ambos.
+
+---
+
+### Exemplo completo: rede com três linguagens
+
+Cenário: banco de dados em Go, serviço de pagamentos em Python, API em Node.js.
+
+**`gaver.json` do banco de dados (Go):**
+
+```json
+{
+  "name": "database",
+  "exports": {
+    "query": {
+      "protocol": "grpc",
+      "address": "localhost:50051",
+      "schema": "proto/database.proto"
+    }
+  },
+  "health": {
+    "url": "http://localhost:50052/health"
+  },
+  "commands": {
+    "run": "./bin/database-server"
+  }
+}
+```
+
+**`gaver.json` do serviço de pagamentos (Python):**
+
+```json
+{
+  "name": "payments",
+  "exports": {
+    "api": {
+      "protocol": "http",
+      "address": "localhost:3001",
+      "schema": "openapi/payments.yaml"
+    },
+    "events": {
+      "protocol": "amqp",
+      "address": "localhost:5672"
+    }
+  },
+  "health": {
+    "url": "http://localhost:3001/health"
+  },
+  "commands": {
+    "init": "pip install -r requirements.txt",
+    "run": "python src/main.py"
+  }
+}
+```
+
+O módulo `payments` em Python lê `DATABASE_QUERY` do ambiente para chamar o banco:
+
+```python
+import os
+import grpc
+from proto import database_pb2_grpc
+
+channel = grpc.insecure_channel(
+    os.environ["DATABASE_QUERY"].replace("grpc://", "")
+)
+stub = database_pb2_grpc.DatabaseStub(channel)
+```
+
+**`gaver.json` da API (Node.js):**
+
+```json
+{
+  "name": "api",
+  "exports": {
+    "gateway": {
+      "protocol": "http",
+      "address": "localhost:8080"
+    }
+  },
+  "health": {
+    "url": "http://localhost:8080/health"
+  },
+  "commands": {
+    "init": "npm install",
+    "run": "node src/server.js",
+    "build": "npm run build"
+  }
+}
+```
+
+**`gaver.json` do projeto raiz:**
+
+```json
+{
+  "name": "meu-sistema",
+  "version": "1.0.0",
+  "modules": [
+    {
+      "name": "database",
+      "source": "https://github.com/minha-org/gaver-database",
+      "health": {
+        "url": "http://localhost:50052/health",
+        "timeout": "60s",
+        "interval": "2s"
+      }
+    },
+    {
+      "name": "payments",
+      "source": "https://github.com/minha-org/gaver-payments",
+      "depends_on": ["database"],
+      "env_from": ["database"],
+      "env": { "PAYMENTS_ENV": "production" },
+      "health": {
+        "url": "http://localhost:3001/health",
+        "timeout": "30s",
+        "interval": "3s"
+      }
+    },
+    {
+      "name": "api",
+      "source": "https://github.com/minha-org/gaver-api",
+      "depends_on": ["payments"],
+      "env_from": ["database", "payments"],
+      "env": { "PORT": "8080" },
+      "health": {
+        "url": "http://localhost:8080/health",
+        "timeout": "30s",
+        "interval": "2s"
+      }
+    }
+  ]
+}
+```
+
+O módulo `api` em Node.js recebe todas as variáveis necessárias sem nenhuma configuração extra:
+
+```js
+// process.env disponível automaticamente
+const dbChannel = process.env.DATABASE_QUERY   // grpc://localhost:50051
+const paymentsUrl = process.env.PAYMENTS_API   // http://localhost:3001
+const eventsUrl = process.env.PAYMENTS_EVENTS  // amqp://localhost:5672
+```
+
+Ao rodar `gaver run --parallel`, a ordem de inicialização é:
+
+```
+1. database   → health check ok → exports salvos
+2. payments   → recebe DATABASE_QUERY → health check ok → exports salvos
+3. api        → recebe DATABASE_QUERY + PAYMENTS_API + PAYMENTS_EVENTS → pronto
+```
+
+---
+
+### Protocolos suportados
+
+O campo `protocol` é livre — o Gaver não interpreta nem valida o protocolo, apenas o usa para montar a URL. Qualquer protocolo que a linguagem do módulo suporte funciona:
+
+| Protocolo | Caso de uso | Exemplo de address |
+|---|---|---|
+| `grpc` | RPC tipado, funções, streaming bidirecional | `localhost:50051` |
+| `http` | REST APIs, webhooks, funções simples | `localhost:8080` |
+| `https` | REST APIs com TLS | `localhost:8443` |
+| `unix` | Comunicação local de alta performance via socket | `.gaver/sockets/db.sock` |
+| `amqp` | Filas de mensagem (RabbitMQ, etc.) | `localhost:5672` |
+| `nats` | Pub/sub de baixa latência | `localhost:4222` |
+| `tcp` | Protocolo binário customizado | `localhost:9000` |
+| `redis` | Cache, pub/sub, streams | `localhost:6379` |
+
+---
+
+### Onde os exports ficam armazenados
+
+O Gaver persiste os exports de cada módulo em `.gaver/exports/<nome>.json` na raiz do projeto. Esses arquivos são criados em runtime após o health check de cada módulo e podem ser inspecionados manualmente:
+
+```
+.gaver/
+└── exports/
+    ├── database.json
+    ├── payments.json
+    └── api.json
+```
+
+Conteúdo de `.gaver/exports/database.json`:
+
+```json
+{
+  "query": {
+    "protocol": "grpc",
+    "address": "localhost:50051",
+    "schema": "proto/database.proto"
+  }
+}
+```
+
+Esses arquivos **não devem ser commitados** — eles são gerados a cada `gaver run`. Adicione ao `.gitignore`:
+
+```
+.gaver/exports/
+.gaver/pids/
+```
 
 ---
 

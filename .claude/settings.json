@@ -4,6 +4,9 @@
       "Bash(go build *)",
       "Bash(go vet *)",
       "Bash(grep -rn \"exec\\\\|shell injection\\\\|\\\\\\\\$\\\\|eval\" /home/dalistor/Documentos/Projetos/Gaver/internal/cli/commands/shell.go)"
+    ],
+    "additionalDirectories": [
+      "/home/dalistor/Documentos/Projetos/gaver-templates-esp32/projects/esp32"
     ]
   }
 }

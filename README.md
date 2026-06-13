@@ -17,6 +17,7 @@ Tudo é configurado por um único manifesto: `gaver.json`.
 | **Orquestração** | Gerencia redes de módulos com `depends_on`, health checks e execução paralela |
 | **Módulos externos** | Cada módulo é um repositório Git independente com seu próprio `gaver.json` |
 | **Installs reproduzíveis** | `gaver.lock` fixa commits exatos de cada módulo instalado |
+| **Comunicação entre módulos** | Módulos exportam endpoints e canais; dependentes os recebem como variáveis de ambiente |
 
 ---
 
@@ -57,20 +58,30 @@ O manifesto de cada projeto ou módulo:
   "version": "1.0.0",
   "type": "api",
   "platform": "linux",
+  "exports": {
+    "api": { "protocol": "grpc", "address": "localhost:50051", "schema": "proto/api.proto" }
+  },
   "modules": [
     {
-      "name": "payments",
-      "source": "https://github.com/minha-org/gaver-payments",
-      "depends_on": ["database"],
+      "name": "database",
+      "source": "https://github.com/minha-org/gaver-postgres",
       "health": {
-        "url": "http://localhost:3001/health",
+        "url": "http://localhost:5432/health",
         "timeout": "60s",
         "interval": "3s"
       }
     },
     {
-      "name": "database",
-      "source": "https://github.com/minha-org/gaver-postgres"
+      "name": "payments",
+      "source": "https://github.com/minha-org/gaver-payments",
+      "depends_on": ["database"],
+      "env_from": ["database"],
+      "env": { "PAYMENTS_PORT": "3001" },
+      "health": {
+        "url": "http://localhost:3001/health",
+        "timeout": "60s",
+        "interval": "3s"
+      }
     }
   ],
   "commands": {
@@ -82,6 +93,8 @@ O manifesto de cada projeto ou módulo:
 }
 ```
 
+### Campos do manifesto
+
 | Campo | Tipo | Descrição |
 |---|---|---|
 | `name` | string | Nome do projeto ou módulo (obrigatório) |
@@ -89,8 +102,20 @@ O manifesto de cada projeto ou módulo:
 | `type` | string | Tipo do projeto (livre: `api`, `worker`, `webapp`, etc.) |
 | `platform` | string | Plataforma alvo: `linux`, `darwin`, `windows`, `any` |
 | `parent` | string | Nome do módulo pai (usado em sub-módulos) |
-| `modules` | array | Sub-módulos com `name`, `source`, `depends_on` e `health` |
+| `exports` | object | Canais e endpoints que este módulo expõe aos dependentes |
+| `modules` | array | Sub-módulos referenciados |
 | `commands` | object | Mapa de comandos: `init`, `run`, `build`, ou qualquer chave customizada |
+
+### Campos de cada módulo em `modules[]`
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `name` | string | Identificador local do módulo (obrigatório) |
+| `source` | string | URL do repositório Git (`https://`, `git@`, `ssh://`) |
+| `depends_on` | array | Módulos que devem estar prontos antes deste |
+| `health` | object | Configuração de health check HTTP |
+| `env` | object | Variáveis de ambiente estáticas injetadas neste módulo |
+| `env_from` | array | Módulos cujos `exports` serão injetados como variáveis de ambiente |
 
 ---
 
@@ -280,6 +305,22 @@ gaver gen module --name payments --from minha-org
 | Qualquer | `any` (padrão se omitido) |
 
 O Gaver valida a plataforma no manifesto antes de executar. Módulos incompatíveis com o SO atual são rejeitados na leitura do `gaver.json`.
+
+---
+
+## Comunicação entre módulos
+
+Módulos em linguagens diferentes se comunicam através de variáveis de ambiente injetadas pelo Gaver. O módulo produtor declara o que expõe; o módulo consumidor declara de quem quer receber. O Gaver faz a fiação automaticamente no momento certo — após o health check do produtor e antes de iniciar o consumidor.
+
+```
+database (Go)            api (Python)
+exports:                 env_from: ["database"]
+  functions: grpc://...  ↓ Gaver injeta:
+  stream: unix://...     DATABASE_FUNCTIONS=grpc://localhost:50051
+                         DATABASE_STREAM=unix://.gaver/sockets/db.sock
+```
+
+Veja o guia completo em [docs/modules.md — Comunicação entre módulos](docs/modules.md#comunicação-entre-módulos).
 
 ---
 

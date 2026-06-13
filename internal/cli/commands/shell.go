@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Dalistor/gaver/core/exports"
 	"github.com/Dalistor/gaver/core/manifest"
 	"github.com/Dalistor/gaver/core/pidstore"
 )
@@ -75,17 +76,42 @@ func runShellIn(dir, command string) error {
 }
 
 // startBackgroundIn inicia um processo em background, prefixa logs com o nome do módulo
-// e salva o PID em rootDir/.gaver/pids/.
-func startBackgroundIn(rootDir, name, dir, command string) error {
+// e salva o PID em rootDir/.gaver/pids/. extraEnv é injetado sobre os env vars do processo atual.
+func startBackgroundIn(rootDir, name, dir, command string, extraEnv []string) error {
 	shell, flag := platformShell()
 	c := exec.Command(shell, flag, command)
 	c.Dir = dir
 	c.Stdout = &prefixWriter{prefix: fmt.Sprintf("[%s] ", name), w: os.Stdout}
 	c.Stderr = &prefixWriter{prefix: fmt.Sprintf("[%s] ", name), w: os.Stderr}
+	if len(extraEnv) > 0 {
+		c.Env = append(os.Environ(), extraEnv...)
+	}
 	if err := c.Start(); err != nil {
 		return err
 	}
 	return pidstore.Save(rootDir, name, c.Process.Pid)
+}
+
+// buildEnv constrói o slice de env vars a injetar em um módulo:
+// - Env estáticas declaradas no ModuleRef
+// - Exports dos módulos listados em EnvFrom (carregados de .gaver/exports/)
+func buildEnv(rootDir string, mod manifest.ModuleRef) ([]string, error) {
+	var env []string
+	for k, v := range mod.Env {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	for _, depName := range mod.EnvFrom {
+		exp, err := exports.Load(rootDir, depName)
+		if err != nil {
+			return nil, fmt.Errorf("módulo %q: erro ao carregar exports de %q: %w", mod.Name, depName, err)
+		}
+		if len(exp) == 0 {
+			fmt.Printf("aviso: módulo %q não possui exports registrados para injetar em %q\n", depName, mod.Name)
+			continue
+		}
+		env = append(env, exports.ToEnvSlice(depName, exp)...)
+	}
+	return env, nil
 }
 
 // ── Cascade (init / build / exec) ────────────────────────────────────────────
@@ -127,7 +153,8 @@ func runCascade(dir, cmdKey string, parallel bool) error {
 
 // startNetwork inicia recursivamente todos os run commands em background,
 // respeitando depends_on e aguardando health checks antes de subir o próximo nível.
-func startNetwork(dir, rootDir string, parallel bool) error {
+// extraEnv são as vars de ambiente injetadas pelo módulo pai neste módulo.
+func startNetwork(dir, rootDir string, parallel bool, extraEnv []string) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return err
@@ -143,10 +170,29 @@ func startNetwork(dir, rootDir string, parallel bool) error {
 	}
 	for _, level := range levels {
 		if err := execLevel(absDir, level, parallel, func(modDir string, mod manifest.ModuleRef) error {
-			if err := startNetwork(modDir, rootDir, parallel); err != nil {
+			modEnv, err := buildEnv(rootDir, mod)
+			if err != nil {
 				return err
 			}
-			return waitForHealth(mod)
+			if err := startNetwork(modDir, rootDir, parallel, modEnv); err != nil {
+				return err
+			}
+			if err := waitForHealth(mod); err != nil {
+				return err
+			}
+			// Após health check: persiste exports para que dependentes possam carregar via env_from
+			subManifest, err := manifest.LoadFrom(modDir)
+			if err != nil {
+				return err
+			}
+			if len(subManifest.Exports) > 0 {
+				if err := exports.Save(rootDir, mod.Name, subManifest.Exports); err != nil {
+					fmt.Printf("[%s] aviso: não foi possível salvar exports: %v\n", mod.Name, err)
+				} else {
+					fmt.Printf("[%s] exports registrados\n", mod.Name)
+				}
+			}
+			return nil
 		}); err != nil {
 			return err
 		}
@@ -154,7 +200,7 @@ func startNetwork(dir, rootDir string, parallel bool) error {
 
 	if cmd, ok := m.Commands["run"]; ok && cmd != "" {
 		fmt.Printf("[%s] iniciando...\n", m.Name)
-		if err := startBackgroundIn(rootDir, m.Name, absDir, cmd); err != nil {
+		if err := startBackgroundIn(rootDir, m.Name, absDir, cmd, extraEnv); err != nil {
 			return fmt.Errorf("módulo %q: %w", m.Name, err)
 		}
 	}

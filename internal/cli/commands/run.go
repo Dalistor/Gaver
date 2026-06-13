@@ -35,7 +35,7 @@ var RunCmd = &cobra.Command{
 		}
 
 		// Modo rede: sobe todos em background respeitando depends_on
-		if err := startNetwork(absDir, absDir, parallel); err != nil {
+		if err := startNetwork(absDir, absDir, parallel, nil); err != nil {
 			return err
 		}
 

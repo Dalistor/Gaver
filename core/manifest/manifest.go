@@ -16,12 +16,25 @@ type HealthCheck struct {
 	Interval string `json:"interval,omitempty"` // ex: "2s"
 }
 
+// ExportEntry descreve um endpoint ou canal que este módulo expõe a outros módulos.
+type ExportEntry struct {
+	Protocol string `json:"protocol"`         // grpc, http, unix, amqp, etc.
+	Address  string `json:"address"`           // host:port ou caminho do socket
+	Schema   string `json:"schema,omitempty"`  // .proto, openapi.yaml, etc.
+}
+
+// Exports é o mapa de canais exportados pelo módulo.
+// Chave é o nome do export (ex: "functions", "stream", "events").
+type Exports map[string]ExportEntry
+
 // ModuleRef referencia um sub-módulo declarado em gaver.json.
 type ModuleRef struct {
-	Name      string       `json:"name"`
-	Source    string       `json:"source"`
-	DependsOn []string     `json:"depends_on,omitempty"`
-	Health    *HealthCheck `json:"health,omitempty"`
+	Name      string            `json:"name"`
+	Source    string            `json:"source"`
+	DependsOn []string          `json:"depends_on,omitempty"`
+	Health    *HealthCheck      `json:"health,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`      // env vars estáticas injetadas neste módulo
+	EnvFrom   []string          `json:"env_from,omitempty"` // módulos cujos exports serão injetados como env vars
 }
 
 type Manifest struct {
@@ -30,6 +43,7 @@ type Manifest struct {
 	Type     string            `json:"type"`
 	Platform string            `json:"platform,omitempty"`
 	Parent   string            `json:"parent,omitempty"`
+	Exports  Exports           `json:"exports,omitempty"`
 	Modules  []ModuleRef       `json:"modules,omitempty"`
 	Commands map[string]string `json:"commands"`
 }
