@@ -653,6 +653,22 @@ Commite o `gaver.lock` junto com o `gaver.json` para garantir reprodutibilidade 
 
 ---
 
+## Skill para AI
+
+Para gerar módulos Gaver com qualquer AI assistente, importe o prompt em [`prompts/gaver-module.md`](../prompts/gaver-module.md). Ele contém o schema completo do `gaver.json`, os padrões de exports/imports, exemplos em múltiplas linguagens e as regras de validação.
+
+Como usar:
+
+| Ferramenta | Como importar |
+|---|---|
+| **Claude** (claude.ai) | Cole o conteúdo em "Custom instructions" ou no início do chat |
+| **Cursor** | Salve como `.cursor/rules/gaver.mdc` no projeto |
+| **GitHub Copilot** | Salve como `.github/copilot-instructions.md` |
+| **ChatGPT** | Cole em "Customize ChatGPT → Custom instructions" |
+| **Qualquer outro** | Cole no início da conversa como system prompt |
+
+---
+
 ## Criando um repositório de templates compatível
 
 Para que seus templates sejam usados com `gaver new` e `gaver gen module`, o repositório deve ter esta estrutura:

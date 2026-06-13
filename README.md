@@ -324,6 +324,18 @@ Veja o guia completo em [docs/modules.md — Comunicação entre módulos](docs/
 
 ---
 
+## Skill para AI
+
+Importe o arquivo [`prompts/gaver-module.md`](prompts/gaver-module.md) em qualquer AI para obter um assistente especializado em criar módulos Gaver compatíveis. Funciona com Claude, ChatGPT, Cursor, GitHub Copilot e qualquer ferramenta que aceite instruções de sistema.
+
+Cole o conteúdo do arquivo como:
+- **Claude / ChatGPT** — "Custom instructions" ou início do chat
+- **Cursor** — `.cursor/rules/gaver.mdc` ou "AI Rules" nas configurações
+- **GitHub Copilot** — `.github/copilot-instructions.md`
+- **Qualquer outro AI** — início da conversa como system prompt
+
+---
+
 ## Como criar um repositório de templates compatível
 
 Um repositório Gaver-compatível deve seguir esta estrutura:
