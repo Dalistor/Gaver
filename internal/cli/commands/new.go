@@ -13,16 +13,14 @@ import (
 var NewCmd = &cobra.Command{
 	Use:   "new",
 	Short: "Cria um novo projeto a partir de um repositório de templates",
-	Long: `Clona um repositório de templates registrado e gera a estrutura do projeto
-usando o template correspondente ao tipo escolhido.
+	Long: `Clona um repositório de templates registrado e gera a estrutura do projeto.
 
-O repositório de templates deve ter um diretório projects/<tipo>/ com os
-arquivos do template. Use 'gaver repo add' para registrar repositórios.`,
-	Example: `  gaver new --type api --name meu-servico
-  gaver new --type webapp --name meu-site --from minha-org
-  gaver new --type worker --name processador --from oficial`,
+O repositório de templates deve conter os arquivos do template na sua raiz.
+Use 'gaver repo add' para registrar repositórios.`,
+	Example: `  gaver new --name meu-servico
+  gaver new --name meu-site --from minha-org
+  gaver new --name processador --from oficial`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectType, _ := cmd.Flags().GetString("type")
 		name, _ := cmd.Flags().GetString("name")
 		fromRepo, _ := cmd.Flags().GetString("from")
 
@@ -43,8 +41,8 @@ arquivos do template. Use 'gaver repo add' para registrar repositórios.`,
 		}
 		defer cleanup()
 
-		fmt.Printf("Criando projeto %q (tipo: %s)...\n", name, projectType)
-		if err := scaffold.Generate(repoDir, projectType, name); err != nil {
+		fmt.Printf("Criando projeto %q...\n", name)
+		if err := scaffold.Generate(repoDir, name); err != nil {
 			return err
 		}
 
@@ -82,10 +80,8 @@ func resolveRepo(cfg *registry.Config, fromRepo string) (registry.Repo, error) {
 }
 
 func init() {
-	NewCmd.Flags().StringP("type", "t", "", "Tipo do projeto, conforme os templates disponíveis no repositório (ex: api, webapp, worker)")
 	NewCmd.Flags().StringP("name", "n", "", "Nome do projeto")
 	NewCmd.Flags().StringP("from", "f", "", "Nome do repositório de templates a usar (obrigatório se houver mais de um registrado)")
 
-	NewCmd.MarkFlagRequired("type")
 	NewCmd.MarkFlagRequired("name")
 }

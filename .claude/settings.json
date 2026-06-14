@@ -3,7 +3,9 @@
     "allow": [
       "Bash(go build *)",
       "Bash(go vet *)",
-      "Bash(grep -rn \"exec\\\\|shell injection\\\\|\\\\\\\\$\\\\|eval\" /home/dalistor/Documentos/Projetos/Gaver/internal/cli/commands/shell.go)"
+      "Bash(grep -rn \"exec\\\\|shell injection\\\\|\\\\\\\\$\\\\|eval\" /home/dalistor/Documentos/Projetos/Gaver/internal/cli/commands/shell.go)",
+      "Bash(cat ~/.gaver/config.json 2>/dev/null || echo \"\\(arquivo não existe\\)\")",
+      "Read(//home/dalistor/.gaver/**)"
     ],
     "additionalDirectories": [
       "/home/dalistor/Documentos/Projetos/gaver-templates-esp32/projects/esp32"

@@ -17,7 +17,7 @@ type Data struct {
 	CreatedAt string
 }
 
-func Generate(repoDir, projectType, name string) error {
+func Generate(repoDir, name string) error {
 	if _, err := os.Stat(name); !os.IsNotExist(err) {
 		return fmt.Errorf("diretório %q já existe", name)
 	}
@@ -27,8 +27,7 @@ func Generate(repoDir, projectType, name string) error {
 		CreatedAt: time.Now().Format("2006-01-02"),
 	}
 
-	templateRoot := filepath.Join(repoDir, "projects", projectType)
-	fsys := os.DirFS(templateRoot)
+	fsys := os.DirFS(repoDir)
 	return writeFromTemplates(fsys, name, data)
 }
 
