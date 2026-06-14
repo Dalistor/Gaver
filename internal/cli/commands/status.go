@@ -12,7 +12,14 @@ import (
 
 var StatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Mostra o status dos módulos gerenciados pelo Gaver",
+	Short: "Mostra PID e status de todos os módulos gerenciados",
+	Long: `Lista todos os módulos iniciados por 'gaver run' com seus respectivos PIDs
+e estado atual (rodando / parado).
+
+Um módulo aparece como "parado" se o processo não existe mais — por exemplo,
+se travou ou foi encerrado externamente. Use 'gaver stop' para limpar os
+registros de módulos parados.`,
+	Example: `  gaver status`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		absDir, err := filepath.Abs(".")
 		if err != nil {
@@ -21,7 +28,8 @@ var StatusCmd = &cobra.Command{
 
 		pids := pidstore.List(absDir)
 		if len(pids) == 0 {
-			fmt.Println("Nenhum módulo gerenciado. Use gaver run para iniciar.")
+			fmt.Println("Nenhum módulo em execução.")
+			fmt.Println("Use 'gaver run' para iniciar a rede de módulos.")
 			return nil
 		}
 

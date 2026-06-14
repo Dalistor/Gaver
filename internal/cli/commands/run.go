@@ -10,7 +10,20 @@ import (
 
 var RunCmd = &cobra.Command{
 	Use:   "run",
-	Short: "Executa o módulo. Com sub-módulos, inicia a rede inteira em background",
+	Short: "Executa o módulo ou inicia toda a rede de sub-módulos em background",
+	Long: `Comportamento depende da presença de sub-módulos em gaver.json:
+
+  Sem sub-módulos: executa 'commands.run' em foreground (processo principal).
+
+  Com sub-módulos: inicia cada módulo em background respeitando depends_on,
+  aguarda o health check de cada nível antes de subir o próximo, e bloqueia
+  até Ctrl+C. Ao receber o sinal, encerra todos os processos graciosamente
+  (SIGTERM → aguarda 30s → SIGKILL nos que restarem).
+
+Os logs de cada módulo são prefixados com [nome-do-módulo] para facilitar
+a identificação em redes com múltiplos serviços.`,
+	Example: `  gaver run
+  gaver run --parallel`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parallel, _ := cmd.Flags().GetBool("parallel")
 
@@ -28,7 +41,7 @@ var RunCmd = &cobra.Command{
 		if len(m.Modules) == 0 {
 			runCmd, ok := m.Commands["run"]
 			if !ok || runCmd == "" {
-				return fmt.Errorf("nenhum comando run definido em gaver.json")
+				return fmt.Errorf("nenhum comando 'run' definido em gaver.json\n\nAdicione: \"commands\": { \"run\": \"<comando>\" }")
 			}
 			fmt.Printf("[%s] run\n", m.Name)
 			return runShellIn(absDir, runCmd)
@@ -39,7 +52,7 @@ var RunCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Println("\nRede iniciada. Pressione Ctrl+C para parar.")
+		fmt.Println("\nRede iniciada. Pressione Ctrl+C para encerrar graciosamente.")
 		waitForStop(absDir)
 		return nil
 	},

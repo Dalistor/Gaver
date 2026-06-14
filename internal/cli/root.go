@@ -9,9 +9,12 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "gaver",
-	Short: "Meta-framework para geração de estruturas de trabalho modulares",
-	Long: `Gaver unifica scaffolding de projetos, orquestração de pipelines
-e integração com agentes IA em uma única interface consistente.`,
+	Short: "Motor de execução e gerenciador de módulos para projetos de qualquer tipo",
+	Long: `Gaver orquestra redes de módulos independentes — cada módulo é um repositório
+Git com seu próprio gaver.json que declara comandos, dependências e exports.
+
+O Gaver instala, executa, monitora e encerra módulos em qualquer linguagem,
+respeitando a ordem de depends_on e injetando variáveis de ambiente entre módulos.`,
 }
 
 func Execute() {

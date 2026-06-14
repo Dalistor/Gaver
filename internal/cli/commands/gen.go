@@ -11,14 +11,22 @@ import (
 
 var GenCmd = &cobra.Command{
 	Use:   "gen",
-	Short: "Gera artefatos para um projeto existente",
+	Short: "Gera código e estruturas a partir de templates",
+	Long: `Gera boilerplate para projetos existentes usando templates do repositório
+de templates registrado. Deve ser executado na raiz de um projeto Gaver.`,
+	Example: `  gaver gen module --name orders
+  gaver gen module --name payments --from oficial`,
 }
 
 var genModuleCmd = &cobra.Command{
 	Use:   "module",
-	Short: "Gera a estrutura de um novo módulo de domínio",
-	Example: `  gaver gen module --name orders --from oficial
-  gaver gen module --name users`,
+	Short: "Gera a estrutura de um novo módulo de domínio no projeto atual",
+	Long: `Clona o repositório de templates e gera os arquivos do módulo em src/modules/<nome>/.
+
+O template de módulo deve estar em modules/<nome>/ dentro do repositório de templates.
+Após gerar, registre o módulo na aplicação conforme as instruções do template.`,
+	Example: `  gaver gen module --name orders
+  gaver gen module --name payments --from oficial`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
 		fromRepo, _ := cmd.Flags().GetString("from")
@@ -51,8 +59,8 @@ var genModuleCmd = &cobra.Command{
 }
 
 func init() {
-	genModuleCmd.Flags().StringP("name", "n", "", "Nome do módulo")
-	genModuleCmd.Flags().StringP("from", "f", "", "Nome do repositório de templates a usar")
+	genModuleCmd.Flags().StringP("name", "n", "", "Nome do módulo a gerar")
+	genModuleCmd.Flags().StringP("from", "f", "", "Nome do repositório de templates a usar (obrigatório se houver mais de um registrado)")
 	_ = genModuleCmd.MarkFlagRequired("name")
 
 	GenCmd.AddCommand(genModuleCmd)

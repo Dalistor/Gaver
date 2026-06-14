@@ -11,11 +11,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// maxInstallDepth limita a recursão de módulos para prevenir ciclos ou hierarquias malformadas.
 const maxInstallDepth = 20
 
 var InstallCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Baixa e instala todos os sub-módulos declarados em gaver.json recursivamente",
+	Short: "Clona e instala todos os sub-módulos declarados em gaver.json",
+	Long: `Lê os módulos declarados em gaver.json, clona cada repositório remoto em
+modules/<nome>/ e repete o processo recursivamente para os sub-módulos de cada um.
+
+Usa gaver.lock para garantir instalações reproduzíveis: se o lock existir, instala
+exatamente o commit registrado. Ao instalar um módulo novo, registra o commit atual
+no lock. Commite o gaver.lock para que outros ambientes instalem as mesmas versões.`,
+	Example: `  gaver install`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		absDir, err := filepath.Abs(".")
 		if err != nil {
